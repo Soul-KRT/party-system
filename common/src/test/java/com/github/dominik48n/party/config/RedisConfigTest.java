@@ -16,40 +16,39 @@
 
 package com.github.dominik48n.party.config;
 
-import java.io.IOException;
-import java.util.Collections;
-import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import org.junit.jupiter.api.Test;
-import redis.clients.jedis.HostAndPort;
 
 public class RedisConfigTest {
 
     @Test
-    void testFromDocument() throws IOException {
-        final List<HostAndPort> hosts = Collections.singletonList(new HostAndPort("redis.example.com", 3133));
-        final String user = "admin", password = "topsecret";
+    void testFromDocument() {
+        final String host = "redis.example.com", user = "admin", password = "topsecret";
+        final int port = 6380;
 
         final Document document = new Document()
-                .append("hosts", RedisConfig.hostsToStringList(hosts))
+                .append("hostname", host)
+                .append("port", port)
                 .append("username", user)
                 .append("password", password);
         final RedisConfig config = RedisConfig.fromDocument(document);
 
-        assertEquals(hosts, config.hosts());
+        assertEquals(host, config.hostname());
+        assertEquals(port, config.port());
         assertEquals(user, config.username());
         assertEquals(password, config.password());
     }
 
     @Test
-    void testToDocument() throws IOException {
-        final List<HostAndPort> hosts = Collections.singletonList(new HostAndPort("redis.example.com", 5555));
-        final String user = "admin", password = "topsecret";
+    void testToDocument() {
+        final String host = "redis.example.com", user = "admin", password = "topsecret";
+        final int port = 6380;
 
-        final RedisConfig config = new RedisConfig(hosts, user, password);
+        final RedisConfig config = new RedisConfig(host, port, user, password);
         final Document document = config.toDocument();
 
-        assertEquals(RedisConfig.hostsToStringList(hosts), document.getStringList("hosts"));
+        assertEquals(host, document.getString("hostname", "incorrect host"));
+        assertEquals(port, document.getInt("port", -1));
         assertEquals(user, document.getString("username", "incorrect username"));
         assertEquals(password, document.getString("password", "incorrect password"));
     }

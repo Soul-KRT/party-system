@@ -20,27 +20,21 @@ import com.github.dominik48n.party.config.Document;
 import com.github.dominik48n.party.config.RedisConfig;
 import com.github.dominik48n.party.user.UserManager;
 import com.google.common.collect.Lists;
-import java.util.HashSet;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.jetbrains.annotations.NotNull;
-import redis.clients.jedis.DefaultJedisClientConfig;
-import redis.clients.jedis.HostAndPort;
-import redis.clients.jedis.JedisClientConfig;
-import redis.clients.jedis.JedisCluster;
-import redis.clients.jedis.JedisPooled;
+import redis.clients.jedis.Jedis;
+import redis.clients.jedis.JedisPool;
+import redis.clients.jedis.JedisPoolConfig;
 import redis.clients.jedis.JedisPubSub;
-import redis.clients.jedis.Protocol;
-import redis.clients.jedis.UnifiedJedis;
-import redis.clients.jedis.exceptions.JedisClusterException;
 
-public class RedisManager extends JedisPubSub implements AutoCloseable {
+public class RedisManager extends JedisPubSub {
 
     private final @NotNull ExecutorService executor = Executors.newFixedThreadPool(1);
 
     private final @NotNull List<RedisSubscription> subscriptions = Lists.newArrayList();
-    private final @NotNull UnifiedJedis jedis;
+    private final @NotNull JedisPool jedisPool;
 
     /**
      * Constructs a new RedisManager using the specified {@link RedisConfig}.
@@ -48,20 +42,10 @@ public class RedisManager extends JedisPubSub implements AutoCloseable {
      * @param config The {@link RedisConfig} to use.
      */
     public RedisManager(final @NotNull RedisConfig config) {
-        final JedisClientConfig clientConfig = DefaultJedisClientConfig.builder()
-                .user(config.username())
-                .password(config.password())
-                .timeoutMillis(Protocol.DEFAULT_TIMEOUT)
-                .build();
-
-        UnifiedJedis jedis;
-        try {
-            jedis = new JedisCluster(new HashSet<>(config.hosts()), clientConfig);
-        } catch (final JedisClusterException e) {
-            final HostAndPort host = config.hosts().stream().findAny().orElseThrow(() -> new IllegalStateException("No Redis node was found in the config."));
-            jedis = new JedisPooled(host, clientConfig);
-        }
-        this.jedis = jedis;
+        final JedisPoolConfig poolConfig = new JedisPoolConfig();
+        this.jedisPool = config.username().isEmpty() ?
+                new JedisPool(poolConfig, config.hostname(), config.port(), 3000, config.password()) :
+                new JedisPool(poolConfig, config.hostname(), config.port(), 3000, config.username(), config.password());
     }
 
     @Override
@@ -74,10 +58,9 @@ public class RedisManager extends JedisPubSub implements AutoCloseable {
     /**
      * Disconnects this RedisManager from the Redis server.
      */
-    @Override
     public void close() {
         super.unsubscribe();
-        this.jedis.close();
+        this.jedisPool.destroy();
     }
 
     /**
@@ -99,7 +82,9 @@ public class RedisManager extends JedisPubSub implements AutoCloseable {
      * @param message The message to publish to the channel.
      */
     public void publish(final @NotNull String channel, final @NotNull String message) {
-        this.jedis.publish(channel, message);
+        try (final Jedis jedis = this.jedisPool.getResource()) {
+            jedis.publish(channel, message);
+        }
     }
 
     /**
@@ -115,12 +100,17 @@ public class RedisManager extends JedisPubSub implements AutoCloseable {
         this.subscriptions.add(new RedisSwitchServerSub<>(userManager));
         this.subscriptions.add(new RedisUpdateUserPartySub<>(userManager));
 
-        this.executor.execute(
-                () -> RedisManager.this.jedis.subscribe(this, this.subscriptions.stream().map(RedisSubscription::channel).toArray(String[]::new))
-        );
+        this.executor.execute(() -> {
+            try (final Jedis jedis = RedisManager.this.jedisPool.getResource()) {
+                jedis.subscribe(
+                        this,
+                        this.subscriptions.stream().map(RedisSubscription::channel).toArray(String[]::new)
+                );
+            }
+        });
     }
 
-    public @NotNull UnifiedJedis jedis() {
-        return this.jedis;
+    public @NotNull JedisPool jedisPool() {
+        return this.jedisPool;
     }
 }
